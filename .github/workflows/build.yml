@@ -1,0 +1,90 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'Nama aplikasi'
+        required: true
+        default: 'MyApp'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Read build config
+        id: config
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+
+      - name: Copy icon to Flutter project
+        run: |
+          if [ -f "assets/ic_launcher.jpg" ]; then
+            ICON_FILE="assets/ic_launcher.jpg"
+          elif [ -f "assets/ic_launcher.png" ]; then
+            ICON_FILE="assets/ic_launcher.png"
+          else
+            ICON_FILE=""
+          fi
+          if [ -n "$ICON_FILE" ]; then
+            for DIR in flutter_project/android/app/src/main/res/mipmap-hdpi flutter_project/android/app/src/main/res/mipmap-mdpi flutter_project/android/app/src/main/res/mipmap-xhdpi flutter_project/android/app/src/main/res/mipmap-xxhdpi flutter_project/android/app/src/main/res/mipmap-xxxhdpi; do
+              mkdir -p "$DIR"
+              cp "$ICON_FILE" "$DIR/ic_launcher.png"
+            done
+          fi
+
+      - name: Update app name
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          SAFE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+          STRINGS_FILE="flutter_project/android/app/src/main/res/values/strings.xml"
+          if [ -f "$STRINGS_FILE" ]; then
+            sed -i "s/<string name=\"app_name\">.*<\/string>/<string name=\"app_name\">${APP_NAME}<\/string>/" "$STRINGS_FILE"
+          fi
+          PUBSPEC="flutter_project/pubspec.yaml"
+          if [ -f "$PUBSPEC" ]; then
+            sed -i "s/^name: .*/name: ${SAFE_NAME}/" "$PUBSPEC"
+          fi
+          MANIFEST="flutter_project/android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            sed -i "s/android:label=\"[^\"]*\"/android:label=\"${APP_NAME}\"/" "$MANIFEST"
+          fi
+
+      - name: Flutter pub get
+        working-directory: flutter_project
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: flutter_project
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Rename APK
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          SAFE_NAME=$(echo "$APP_NAME" | sed 's/[^a-zA-Z0-9]/_/g')
+          mv flutter_project/build/app/outputs/flutter-apk/app-release.apk flutter_project/build/app/outputs/flutter-apk/${SAFE_NAME}.apk
+          echo "apk_path=flutter_project/build/app/outputs/flutter-apk/${SAFE_NAME}.apk" >> $GITHUB_ENV
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.app_name }}-apk
+          path: ${{ env.apk_path }}
+          retention-days: 7
